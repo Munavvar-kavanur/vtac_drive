@@ -1,0 +1,276 @@
+'use client';
+
+import { useState, useRef, useEffect } from 'react';
+import { Folder as FolderIcon, FileText, MoreVertical, FolderPlus, FilePlus, UploadCloud, Share2 } from 'lucide-react';
+import Link from 'next/link';
+import CreateFolderModal from './CreateFolderModal';
+import ShareModal from './ShareModal';
+import FileActionsMenu from './FileActionsMenu';
+import { createFolder, deleteFolder } from '@/app/actions/folder-actions';
+import { uploadFile, deleteFile } from '@/app/actions/file-actions';
+import { useRouter } from 'next/navigation';
+
+export default function FileBrowser({ initialFolders, initialFiles, parentId }) {
+    const [viewMode, setViewMode] = useState('grid');
+    const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
+    const [shareItem, setShareItem] = useState(null); // Item to share | null
+    const [isDragging, setIsDragging] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
+    const fileInputRef = useRef(null);
+    const router = useRouter();
+
+    useEffect(() => {
+        const handleTriggerUpload = () => {
+            if (fileInputRef.current) {
+                fileInputRef.current.click();
+            }
+        };
+        window.addEventListener('trigger-upload', handleTriggerUpload);
+        return () => window.removeEventListener('trigger-upload', handleTriggerUpload);
+    }, []);
+
+    const handleFileUpload = async (files) => {
+        if (!files || files.length === 0) return;
+        setIsUploading(true);
+        setUploadProgress(0);
+
+        // Upload sequentially for now
+        for (const file of files) {
+            console.log('Uploading file:', file.name);
+
+            try {
+                await new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    if (parentId) formData.append('parentId', parentId);
+
+                    xhr.upload.addEventListener('progress', (event) => {
+                        if (event.lengthComputable) {
+                            const percent = Math.round((event.loaded / event.total) * 100);
+                            setUploadProgress(percent);
+                        }
+                    });
+
+                    xhr.addEventListener('load', () => {
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            const response = JSON.parse(xhr.responseText);
+                            if (response.success) {
+                                window.dispatchEvent(new CustomEvent('refresh-storage-stats'));
+                                resolve(response);
+                            } else {
+                                reject(new Error(response.error));
+                            }
+                        } else {
+                            reject(new Error(`Upload failed with status ${xhr.status}`));
+                        }
+                    });
+
+                    xhr.addEventListener('error', () => {
+                        reject(new Error('Network error during upload'));
+                    });
+
+                    xhr.open('POST', '/api/upload');
+                    xhr.send(formData);
+                });
+
+            } catch (error) {
+                console.error('Upload failed:', error);
+                alert(`Failed to upload ${file.name}: ${error.message}`);
+                setIsUploading(false);
+                return; // Stop matching on error? Or continue? For now stop.
+            }
+        }
+
+        router.refresh();
+        setIsUploading(false);
+        setUploadProgress(0);
+    };
+
+    const onDrop = (e) => {
+        e.preventDefault();
+        setIsDragging(false);
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            handleFileUpload(e.dataTransfer.files);
+        }
+    };
+
+    const onDragOver = (e) => {
+        e.preventDefault();
+        setIsDragging(true);
+    };
+
+    const onDragLeave = (e) => {
+        e.preventDefault();
+        setIsDragging(false);
+    };
+
+    return (
+        <div
+            className={`space-y-6 relative min-h-[500px] transition-all ${isDragging ? 'bg-blue-500/10 ring-2 ring-blue-500 ring-inset rounded-xl' : ''}`}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+        >
+            <input
+                type="file"
+                ref={fileInputRef}
+                className="hidden"
+                multiple
+                onChange={(e) => handleFileUpload(e.target.files)}
+            />
+
+            {isDragging && (
+                <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+                    <div className="glass-panel p-8 rounded-2xl flex flex-col items-center">
+                        <UploadCloud size={64} className="text-blue-500 mb-4 animate-bounce" />
+                        <h3 className="text-xl font-bold text-white">Drop files to upload</h3>
+                    </div>
+                </div>
+            )}
+
+            <CreateFolderModal
+                isOpen={isFolderModalOpen}
+                onClose={() => setIsFolderModalOpen(false)}
+                parentId={parentId}
+            />
+
+            <ShareModal
+                isOpen={!!shareItem}
+                onClose={() => setShareItem(null)}
+                item={shareItem}
+            />
+
+            {/* Interaction Bar */}
+            <div className="flex items-center justify-between p-4 bg-slate-900/50 rounded-xl border border-white/5">
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => setIsFolderModalOpen(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-all text-sm font-medium shadow-lg shadow-blue-500/20"
+                    >
+                        <FolderPlus size={16} /> New Folder
+                    </button>
+                    <button
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploading}
+                        className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-all text-sm font-medium"
+                    >
+                        {isUploading ? <UploadCloud size={16} className="animate-pulse" /> : <FilePlus size={16} />}
+                        {isUploading ? 'Uploading...' : 'Upload File'}
+                    </button>
+                </div>
+
+                <div className="flex bg-slate-800 p-1 rounded-lg">
+                    <button
+                        onClick={() => setViewMode('grid')}
+                        className={`p-2 rounded-md ${viewMode === 'grid' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                    >
+                        <div className="w-4 h-4 grid grid-cols-2 gap-0.5">
+                            <div className="bg-current rounded-[1px]"></div><div className="bg-current rounded-[1px]"></div>
+                            <div className="bg-current rounded-[1px]"></div><div className="bg-current rounded-[1px]"></div>
+                        </div>
+                    </button>
+                    <button
+                        onClick={() => setViewMode('list')}
+                        className={`p-2 rounded-md ${viewMode === 'list' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                    >
+                        <div className="w-4 h-4 flex flex-col gap-1 justify-center">
+                            <div className="h-0.5 w-full bg-current rounded-full"></div>
+                            <div className="h-0.5 w-full bg-current rounded-full"></div>
+                            <div className="h-0.5 w-full bg-current rounded-full"></div>
+                        </div>
+                    </button>
+                </div>
+            </div>
+
+            {/* Upload Progress Bar */}
+            {isUploading && (
+                <div className="glass-panel p-4 rounded-xl border border-blue-500/30 bg-blue-500/5">
+                    <div className="flex justify-between text-sm text-slate-300 mb-2">
+                        <span className="flex items-center gap-2"><UploadCloud size={16} className="animate-bounce" /> Uploading files...</span>
+                        <span className="font-mono">{uploadProgress}%</span>
+                    </div>
+                    <div className="h-2 w-full bg-slate-700 rounded-full overflow-hidden">
+                        <div
+                            className="h-full bg-blue-500 transition-all duration-100 ease-out"
+                            style={{ width: `${uploadProgress}%` }}
+                        ></div>
+                    </div>
+                </div>
+            )}
+
+            {/* Content Area */}
+            {viewMode === 'grid' ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                    {/* Folders */}
+                    {initialFolders.map((folder) => (
+                        <Link
+                            href={`/dashboard/folders/${folder._id}`}
+                            key={folder._id}
+                            className="glass-panel p-4 rounded-xl flex flex-col items-center justify-center gap-3 aspect-square hover:bg-slate-800/80 transition-all group cursor-pointer border border-transparent hover:border-blue-500/50 relative"
+                        >
+                            <FileActionsMenu
+                                item={folder}
+                                onShare={(item) => setShareItem({ ...item, type: 'folder' })}
+                                onDelete={async () => {
+                                    if (confirm(`Are you sure you want to delete "${folder.name}"?`)) {
+                                        const result = await deleteFolder(folder._id);
+                                        if (result.success) {
+                                            router.refresh();
+                                        } else {
+                                            alert(result.error || 'Failed to delete folder');
+                                        }
+                                    }
+                                }}
+                            />
+                            <FolderIcon size={48} className="text-blue-500 fill-blue-500/20 group-hover:scale-110 transition-transform" />
+                            <span className="text-sm font-medium text-slate-200 truncate w-full text-center">{folder.name}</span>
+                        </Link>
+                    ))}
+
+                    {/* Files */}
+                    {initialFiles.map((file) => (
+                        <div
+                            key={file._id}
+                            className="glass-panel p-4 rounded-xl flex flex-col items-center justify-center gap-3 aspect-square hover:bg-slate-800/80 transition-all group cursor-pointer border border-transparent hover:border-white/10 relative"
+                        >
+                            <FileActionsMenu
+                                item={file}
+                                onShare={(item) => setShareItem({ ...item, type: 'file' })}
+                                onDelete={async (item) => {
+                                    if (confirm(`Are you sure you want to delete "${file.name}"?`)) {
+                                        const result = await deleteFile(item._id);
+                                        if (result.success) {
+                                            router.refresh();
+                                        } else {
+                                            alert(result.error || 'Failed to delete file');
+                                        }
+                                    }
+                                }}
+                            />
+                            <div className="h-12 w-12 rounded bg-slate-700/50 flex items-center justify-center text-slate-400 group-hover:text-white transition-colors">
+                                <FileText size={24} />
+                            </div>
+                            <div className="text-center w-full">
+                                <p className="text-sm font-medium text-slate-200 truncate">{file.name}</p>
+                                <p className="text-xs text-slate-500">{file.size} KB</p>
+                            </div>
+                        </div>
+                    ))}
+
+                    {initialFolders.length === 0 && initialFiles.length === 0 && (
+                        <div className="col-span-full py-20 text-center text-slate-500">
+                            This folder is empty. Start by uploading a file!
+                        </div>
+                    )}
+                </div>
+            ) : (
+                <div className="glass-panel rounded-xl overflow-hidden">
+                    {/* List view implementation */}
+                    <div className="p-4 text-center text-slate-500">List view coming soon</div>
+                </div>
+            )}
+        </div>
+    );
+}
