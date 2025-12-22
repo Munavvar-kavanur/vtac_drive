@@ -31,7 +31,10 @@ export async function generateShareLink(type, id) {
             token += chars.charAt(Math.floor(Math.random() * chars.length));
         }
 
-        const systemShareLink = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/share/${token}`;
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL
+            || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
+
+        const systemShareLink = `${baseUrl}/share/${token}`;
 
         await File.findByIdAndUpdate(id, {
             isPublic: true,
@@ -43,5 +46,8 @@ export async function generateShareLink(type, id) {
     }
 
     // Check if it's a folder, for now mock
-    return { success: true, link: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/share/folder/${id}` };
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL
+        || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
+
+    return { success: true, link: `${baseUrl}/share/folder/${id}` };
 }

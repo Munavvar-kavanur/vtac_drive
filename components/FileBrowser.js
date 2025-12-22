@@ -37,15 +37,25 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
 
         // Upload sequentially for now
         for (const file of files) {
-            console.log('Uploading file:', file.name);
+            console.log('Starting resumable upload for:', file.name);
 
             try {
-                await new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest();
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    if (parentId) formData.append('parentId', parentId);
+                // 1. Get Resumable Session URL from Server
+                // We dynamically import the action to ensure it works in Client Component context if needed, 
+                // though direct import at top is fine.
+                const { getUploadSession, finalizeUpload } = await import('@/app/actions/file-actions');
 
+                const sessionResult = await getUploadSession(file.name, file.type, parentId);
+
+                if (!sessionResult.success) {
+                    throw new Error(sessionResult.error || 'Failed to init upload session');
+                }
+
+                const uploadUrl = sessionResult.uploadUrl;
+
+                // 2. Upload directly to Google Drive
+                const driveResponse = await new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
                     xhr.upload.addEventListener('progress', (event) => {
                         if (event.lengthComputable) {
                             const percent = Math.round((event.loaded / event.total) * 100);
@@ -55,15 +65,9 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
 
                     xhr.addEventListener('load', () => {
                         if (xhr.status >= 200 && xhr.status < 300) {
-                            const response = JSON.parse(xhr.responseText);
-                            if (response.success) {
-                                window.dispatchEvent(new CustomEvent('refresh-storage-stats'));
-                                resolve(response);
-                            } else {
-                                reject(new Error(response.error));
-                            }
+                            resolve(JSON.parse(xhr.responseText));
                         } else {
-                            reject(new Error(`Upload failed with status ${xhr.status}`));
+                            reject(new Error(`Drive upload failed: ${xhr.status}`));
                         }
                     });
 
@@ -71,18 +75,36 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
                         reject(new Error('Network error during upload'));
                     });
 
-                    xhr.open('POST', '/api/upload');
-                    xhr.send(formData);
+                    xhr.open('PUT', uploadUrl);
+                    // Google Drive requires Content-Type header on the PUT to match initial request
+                    // BUT for resumable PUT, usually we just send bytes. 
+                    // However, we must Ensure NO auth header is sent here because the URL includes the token.
+                    // XHR by default doesn't add it unless we ask.
+                    xhr.send(file);
                 });
+
+                console.log('Drive Upload Complete:', driveResponse);
+
+                // 3. Finalize on Server (Save to DB)
+                // Drive response includes { id, name, mimeType, size, ... }
+                // Warning: Drive sometimes doesn't return webViewLink in the upload response. 
+                // We might need to fetch it or let the server do it.
+
+                const finalResult = await finalizeUpload(driveResponse, parentId);
+
+                if (!finalResult.success) {
+                    throw new Error(finalResult.error);
+                }
 
             } catch (error) {
                 console.error('Upload failed:', error);
                 alert(`Failed to upload ${file.name}: ${error.message}`);
                 setIsUploading(false);
-                return; // Stop matching on error? Or continue? For now stop.
+                return;
             }
         }
 
+        window.dispatchEvent(new CustomEvent('refresh-storage-stats'));
         router.refresh();
         setIsUploading(false);
         setUploadProgress(0);

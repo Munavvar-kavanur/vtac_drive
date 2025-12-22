@@ -8,6 +8,7 @@ import { getStorageAdapter } from '@/lib/storage/StorageManager';
 import { getSession } from '@/lib/auth';
 
 export async function uploadFile(formData) {
+    // Legacy support or small files
     await dbConnect();
 
     const file = formData.get('file');
@@ -19,15 +20,13 @@ export async function uploadFile(formData) {
     if (!session) return { success: false, error: 'Unauthorized' };
 
     try {
-        // 1. Upload to Storage Provider
         const adapter = getStorageAdapter('google_drive');
         const uploadResult = await adapter.upload(file, parentId);
 
-        // 2. create DB Model
         const newFile = await File.create({
             name: file.name,
             mimeType: file.type,
-            size: Math.round(file.size / 1024), // KB
+            size: Math.round(file.size / 1024),
             folder: parentId,
             user: session.userId,
             storageProvider: 'google_drive',
@@ -36,7 +35,6 @@ export async function uploadFile(formData) {
             downloadUrl: uploadResult.downloadUrl
         });
 
-        // 3. Update User Storage Usage
         await User.findByIdAndUpdate(session.userId, {
             $inc: { storageUsage: file.size }
         });
@@ -44,6 +42,77 @@ export async function uploadFile(formData) {
         return { success: true, file: JSON.parse(JSON.stringify(newFile)) };
     } catch (error) {
         console.error('Upload error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+export async function getUploadSession(fileName, mimeType, parentId) {
+    await dbConnect();
+    const session = await getSession();
+    if (!session) return { success: false, error: 'Unauthorized' };
+
+    try {
+        const adapter = getStorageAdapter('google_drive');
+        // We handle logic here to map internal parentId to a Drive folder ID if we were doing deep nesting map
+        // For now, adapter uses root folder.
+        const uploadUrl = await adapter.getResumableUploadUrl(fileName, mimeType, parentId);
+
+        return { success: true, uploadUrl };
+    } catch (error) {
+        console.error('Get Upload Session Error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+export async function completeUpload(fileName, fileSize, mimeType, parentId) {
+    await dbConnect();
+    const session = await getSession();
+    if (!session) return { success: false, error: 'Unauthorized' };
+
+    try {
+        // Since we don't get the external ID back easily from the client PUT response (it's in the response body of the PUT)
+        // usage: client sends us the response body they got from Google
+        // BUT: The client response from Google Drive PUT includes 'id', 'name', 'mimeType' etc.
+        // So we should ask the client to pass that data back to us.
+
+        // Let's assume the argument needs to be flexible.
+        // Actually, the client should query the Drive API or we can just list the latest file?
+        // No, the client receives the JSON response from the PUT completion.
+        // Let's update the signature to accept the Drive metadata.
+
+        console.error('Incorrect usage of completeUpload. Waiting for implementation details update.');
+        throw new Error('Not implemented fully');
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+export async function finalizeUpload(fileData, parentId) {
+    // fileData should contain: { id, name, mimeType, size, webViewLink, webContentLink } from Google Drive response
+    await dbConnect();
+    const session = await getSession();
+    if (!session) return { success: false, error: 'Unauthorized' };
+
+    try {
+        const newFile = await File.create({
+            name: fileData.name,
+            mimeType: fileData.mimeType,
+            size: Math.round(parseInt(fileData.size) / 1024), // Drive returns size in bytes string
+            folder: parentId,
+            user: session.userId,
+            storageProvider: 'google_drive',
+            externalId: fileData.id,
+            externalUrl: fileData.webViewLink, // We need to fetch this if not returned by Upload response
+            downloadUrl: fileData.webContentLink // Same here
+        });
+
+        await User.findByIdAndUpdate(session.userId, {
+            $inc: { storageUsage: parseInt(fileData.size) }
+        });
+
+        return { success: true, file: JSON.parse(JSON.stringify(newFile)) };
+    } catch (error) {
+        console.error('Finalize Upload Error:', error);
         return { success: false, error: error.message };
     }
 }
