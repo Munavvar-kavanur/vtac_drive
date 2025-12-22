@@ -7,8 +7,17 @@ import File from '@/models/File';
 
 import { getStorageAdapter } from '@/lib/storage/StorageManager';
 
+import { headers } from 'next/headers';
+
 export async function generateShareLink(type, id) {
     await dbConnect();
+
+    // START: Dynamic Base URL Detection (Zero Config)
+    const headersList = await headers();
+    const host = headersList.get('host');
+    const protocol = process.env.NODE_ENV === 'development' ? 'http' : 'https';
+    const baseUrl = `${protocol}://${host}`;
+    // END: Dynamic Base URL Detection
 
     // Only supporting File sharing via public link for now
     if (type === 'file') {
@@ -16,8 +25,6 @@ export async function generateShareLink(type, id) {
         if (!file || !file.externalId) {
             return { success: false, error: 'File not found or not synced' };
         }
-
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
 
         // STABILITY FIX: If file is already public and has a token, reuse it!
         if (file.isPublic && file.shareToken) {
@@ -50,8 +57,5 @@ export async function generateShareLink(type, id) {
     }
 
     // Check if it's a folder, for now mock
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL
-        || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
-
     return { success: true, link: `${baseUrl}/share/folder/${id}` };
 }
