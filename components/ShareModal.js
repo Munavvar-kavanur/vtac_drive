@@ -11,9 +11,14 @@ export default function ShareModal({ isOpen, onClose, item }) {
     const [isLoading, setIsLoading] = useState(false);
 
     // Initialize link on mount (safe because parent keys component by item._id)
+    // Initialize link on mount (safe because parent keys component by item._id)
     useEffect(() => {
         if (item?.isPublic && item?.shareToken && typeof window !== 'undefined') {
-            setGeneratedLink(`${window.location.origin}/share/${item.shareToken}`);
+            // Use setTimeout to avoid "synchronous setState" build error
+            const timer = setTimeout(() => {
+                setGeneratedLink(`${window.location.origin}/share/${item.shareToken}`);
+            }, 0);
+            return () => clearTimeout(timer);
         }
     }, [item]); // Run when item exists (on mount)
 
