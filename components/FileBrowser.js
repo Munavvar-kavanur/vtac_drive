@@ -77,9 +77,8 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
 
                     xhr.open('PUT', uploadUrl);
                     // Google Drive requires Content-Type header on the PUT to match initial request
-                    // BUT for resumable PUT, usually we just send bytes. 
-                    // However, we must Ensure NO auth header is sent here because the URL includes the token.
-                    // XHR by default doesn't add it unless we ask.
+                    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+
                     xhr.send(file);
                 });
 
