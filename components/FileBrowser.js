@@ -41,11 +41,9 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
 
             try {
                 // 1. Get Resumable Session URL from Server
-                // We dynamically import the action to ensure it works in Client Component context if needed, 
-                // though direct import at top is fine.
                 const { getUploadSession, finalizeUpload } = await import('@/app/actions/file-actions');
 
-                const sessionResult = await getUploadSession(file.name, file.type, parentId);
+                const sessionResult = await getUploadSession(file.name, file.type, file.size, parentId);
 
                 if (!sessionResult.success) {
                     throw new Error(sessionResult.error || 'Failed to init upload session');
@@ -53,42 +51,28 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
 
                 const uploadUrl = sessionResult.uploadUrl;
 
-                // 2. Upload directly to Google Drive
-                const driveResponse = await new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest();
-                    xhr.upload.addEventListener('progress', (event) => {
-                        if (event.lengthComputable) {
-                            const percent = Math.round((event.loaded / event.total) * 100);
-                            setUploadProgress(percent);
-                        }
-                    });
-
-                    xhr.addEventListener('load', () => {
-                        if (xhr.status >= 200 && xhr.status < 300) {
-                            resolve(JSON.parse(xhr.responseText));
-                        } else {
-                            reject(new Error(`Drive upload failed: ${xhr.status}`));
-                        }
-                    });
-
-                    xhr.addEventListener('error', () => {
-                        reject(new Error('Network error during upload'));
-                    });
-
-                    xhr.open('PUT', uploadUrl);
-                    // Google Drive requires Content-Type header on the PUT to match initial request
-                    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-
-                    xhr.send(file);
+                // 2. Upload directly to Google Drive using fetch
+                const uploadResponse = await fetch(uploadUrl, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': file.type || 'application/octet-stream',
+                        // 'Content-Length': file.size.toString() 
+                        // Note: Browsers automatically add Content-Length for Blob/File bodies
+                    },
+                    body: file
                 });
 
+                if (!uploadResponse.ok) {
+                    // 308 Resume Incomplete is technically a success state for chunking, 
+                    // but for single-shot PUT it should be 200 or 201.
+                    const text = await uploadResponse.text();
+                    throw new Error(`Drive Upload Failed: ${uploadResponse.status} ${text}`);
+                }
+
+                const driveResponse = await uploadResponse.json();
                 console.log('Drive Upload Complete:', driveResponse);
 
                 // 3. Finalize on Server (Save to DB)
-                // Drive response includes { id, name, mimeType, size, ... }
-                // Warning: Drive sometimes doesn't return webViewLink in the upload response. 
-                // We might need to fetch it or let the server do it.
-
                 const finalResult = await finalizeUpload(driveResponse, parentId);
 
                 if (!finalResult.success) {
