@@ -10,15 +10,12 @@ export default function ShareModal({ isOpen, onClose, item }) {
     const [copied, setCopied] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
 
-    // Reset state when opening for a new item
+    // Initialize link on mount (safe because parent keys component by item._id)
     useEffect(() => {
-        if (isOpen && item) {
-            setGeneratedLink(item.isPublic && item.shareToken ? `${window.location.origin}/share/${item.shareToken}` : '');
-            setCopied(false);
-        } else {
-            setGeneratedLink('');
+        if (item?.isPublic && item?.shareToken && typeof window !== 'undefined') {
+            setGeneratedLink(`${window.location.origin}/share/${item.shareToken}`);
         }
-    }, [isOpen, item]);
+    }, [item]); // Run when item exists (on mount)
 
     const handleGenerate = async () => {
         setIsLoading(true);

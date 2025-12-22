@@ -177,6 +177,7 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
             />
 
             <ShareModal
+                key={shareItem ? shareItem._id : 'share-modal'}
                 isOpen={!!shareItem}
                 onClose={() => setShareItem(null)}
                 item={shareItem}
