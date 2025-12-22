@@ -43,33 +43,68 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
                 // 1. Get Resumable Session URL from Server
                 const { getUploadSession, finalizeUpload } = await import('@/app/actions/file-actions');
 
-                const sessionResult = await getUploadSession(file.name, file.type, file.size, parentId);
+                const finalMimeType = file.type || 'application/octet-stream';
+                console.log(`[DEBUG] Initializing upload session:`, {
+                    name: file.name,
+                    type: file.type,
+                    finalMimeType,
+                    size: file.size,
+                    origin: window.location.origin
+                });
+
+                const sessionResult = await getUploadSession(file.name, finalMimeType, file.size, parentId, window.location.origin);
 
                 if (!sessionResult.success) {
                     throw new Error(sessionResult.error || 'Failed to init upload session');
                 }
 
                 const uploadUrl = sessionResult.uploadUrl;
+                console.log(`[DEBUG] Upload URL obtained:`, uploadUrl);
+                console.log(`[DEBUG] Starting XHR upload with Content-Type:`, finalMimeType);
 
-                // 2. Upload directly to Google Drive using fetch
-                const uploadResponse = await fetch(uploadUrl, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': file.type || 'application/octet-stream',
-                        // 'Content-Length': file.size.toString() 
-                        // Note: Browsers automatically add Content-Length for Blob/File bodies
-                    },
-                    body: file
+                // 2. Upload directly to Google Drive using XMLHttpRequest (for progress tracking)
+                const driveResponse = await new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+
+                    xhr.upload.addEventListener('progress', (event) => {
+                        if (event.lengthComputable) {
+                            const percent = Math.round((event.loaded / event.total) * 100);
+                            setUploadProgress(percent);
+                        }
+                    });
+
+                    xhr.addEventListener('load', () => {
+                        if (xhr.status >= 200 && xhr.status < 300) { // Standard success
+                            try {
+                                resolve(JSON.parse(xhr.responseText));
+                            } catch (e) {
+                                // Sometimes Drive returns empty body or non-JSON on 200/201 for PUT?
+                                // Usually it returns the file metadata.
+                                resolve({ id: 'unknown', size: file.size });
+                            }
+                        } else if (xhr.status === 308) {
+                            // Resume Incomplete (shouldn't happen for single atomic upload but handle it)
+                            reject(new Error('Incomplete upload (chunking not implemented)'));
+                        } else {
+                            reject(new Error(`Drive upload failed: ${xhr.status} ${xhr.statusText}`));
+                        }
+                    });
+
+                    xhr.addEventListener('error', () => {
+                        reject(new Error('Network error during upload (CORS or Connectivity)'));
+                    });
+
+                    xhr.addEventListener('abort', () => {
+                        reject(new Error('Upload cancelled'));
+                    });
+
+                    xhr.open('PUT', uploadUrl);
+
+                    // Critical: Content-Type must match what was sent to getResumableUploadUrl
+                    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+
+                    xhr.send(file);
                 });
-
-                if (!uploadResponse.ok) {
-                    // 308 Resume Incomplete is technically a success state for chunking, 
-                    // but for single-shot PUT it should be 200 or 201.
-                    const text = await uploadResponse.text();
-                    throw new Error(`Drive Upload Failed: ${uploadResponse.status} ${text}`);
-                }
-
-                const driveResponse = await uploadResponse.json();
                 console.log('Drive Upload Complete:', driveResponse);
 
                 // 3. Finalize on Server (Save to DB)

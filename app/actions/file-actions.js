@@ -46,16 +46,19 @@ export async function uploadFile(formData) {
     }
 }
 
-export async function getUploadSession(fileName, mimeType, fileSize, parentId) {
+export async function getUploadSession(fileName, mimeType, fileSize, parentId, origin) {
     await dbConnect();
     const session = await getSession();
     if (!session) return { success: false, error: 'Unauthorized' };
+
+    // Ensure we have a valid mimeType to match client standard
+    const finalMimeType = mimeType || 'application/octet-stream';
 
     try {
         const adapter = getStorageAdapter('google_drive');
         // We handle logic here to map internal parentId to a Drive folder ID if we were doing deep nesting map
         // For now, adapter uses root folder.
-        const uploadUrl = await adapter.getResumableUploadUrl(fileName, mimeType, fileSize, parentId);
+        const uploadUrl = await adapter.getResumableUploadUrl(fileName, finalMimeType, fileSize, parentId, origin);
 
         return { success: true, uploadUrl };
     } catch (error) {
