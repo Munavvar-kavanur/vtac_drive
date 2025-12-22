@@ -17,6 +17,13 @@ export async function generateShareLink(type, id) {
             return { success: false, error: 'File not found or not synced' };
         }
 
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
+
+        // STABILITY FIX: If file is already public and has a token, reuse it!
+        if (file.isPublic && file.shareToken) {
+            return { success: true, link: `${baseUrl}/share/${file.shareToken}` };
+        }
+
         const adapter = getStorageAdapter(file.storageProvider || 'google_drive');
 
         // Ensure the file is accessible publicly in the cloud so the system can serve it
@@ -30,9 +37,6 @@ export async function generateShareLink(type, id) {
         for (let i = 0; i < 6; i++) {
             token += chars.charAt(Math.floor(Math.random() * chars.length));
         }
-
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL
-            || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
 
         const systemShareLink = `${baseUrl}/share/${token}`;
 

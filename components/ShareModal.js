@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Modal from './Modal';
 import { Share2, Link as LinkIcon, Copy, Check } from 'lucide-react';
 import { generateShareLink } from '@/app/actions/share-actions';
@@ -11,6 +11,15 @@ export default function ShareModal({ isOpen, onClose, item }) {
     const [isLoading, setIsLoading] = useState(false);
 
     // Reset state when opening for a new item
+    useEffect(() => {
+        if (isOpen && item) {
+            setGeneratedLink(item.isPublic && item.shareToken ? `${window.location.origin}/share/${item.shareToken}` : '');
+            setCopied(false);
+        } else {
+            setGeneratedLink('');
+        }
+    }, [isOpen, item]);
+
     const handleGenerate = async () => {
         setIsLoading(true);
         const result = await generateShareLink(item.type, item._id);
