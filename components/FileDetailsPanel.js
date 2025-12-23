@@ -4,17 +4,7 @@ import { X, File, FileText, FileImage, FileAudio, FileVideo, FileCode, FileArchi
 import { useState, useEffect } from 'react';
 
 export default function FileDetailsPanel({ file, onClose, onDelete, onShare }) {
-    const [isVisible, setIsVisible] = useState(false);
-
-    useEffect(() => {
-        if (file) {
-            setIsVisible(true);
-        } else {
-            setIsVisible(false);
-        }
-    }, [file]);
-
-    if (!file && !isVisible) return null;
+    // State removed to fix build error. Animation handled by CSS classes based on 'file' prop.
 
     const formatSize = (bytes) => {
         if (!bytes) return '0 B';

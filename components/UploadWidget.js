@@ -4,14 +4,8 @@ import { useState, useEffect } from 'react';
 import { X, Minimize2, Maximize2, CheckCircle, AlertCircle, File, Loader2 } from 'lucide-react';
 
 export default function UploadWidget({ uploads, onClose }) {
-    const [isExpanded, setIsExpanded] = useState(true);
-    const [uploadList, setUploadList] = useState([]);
-
-    useEffect(() => {
-        // Convert uploads map to array and sort by time (newest first)
-        const list = Object.values(uploads).sort((a, b) => b.timestamp - a.timestamp);
-        setUploadList(list);
-    }, [uploads]);
+    // Compute sorted list directly during render
+    const uploadList = Object.values(uploads).sort((a, b) => b.timestamp - a.timestamp);
 
     if (uploadList.length === 0) return null;
 
