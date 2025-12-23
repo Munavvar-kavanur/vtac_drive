@@ -3,6 +3,7 @@
 import dbConnect from '@/lib/db';
 import File from '@/models/File';
 import User from '@/models/User';
+import { createNotification } from './notification-actions';
 
 import { getStorageAdapter } from '@/lib/storage/StorageManager';
 import { getSession } from '@/lib/auth';
@@ -39,6 +40,13 @@ export async function uploadFile(formData) {
             $inc: { storageUsage: file.size }
         });
 
+        await createNotification(
+            session.userId,
+            'success',
+            'File Uploaded',
+            `"${file.name}" has been successfully uploaded.`
+        );
+
         return { success: true, file: JSON.parse(JSON.stringify(newFile)) };
     } catch (error) {
         console.error('Upload error:', error);
@@ -51,13 +59,10 @@ export async function getUploadSession(fileName, mimeType, fileSize, parentId, o
     const session = await getSession();
     if (!session) return { success: false, error: 'Unauthorized' };
 
-    // Ensure we have a valid mimeType to match client standard
     const finalMimeType = mimeType || 'application/octet-stream';
 
     try {
         const adapter = getStorageAdapter('google_drive');
-        // We handle logic here to map internal parentId to a Drive folder ID if we were doing deep nesting map
-        // For now, adapter uses root folder.
         const uploadUrl = await adapter.getResumableUploadUrl(fileName, finalMimeType, fileSize, parentId, origin);
 
         return { success: true, uploadUrl };
@@ -67,28 +72,10 @@ export async function getUploadSession(fileName, mimeType, fileSize, parentId, o
     }
 }
 
-export async function completeUpload(fileName, fileSize, mimeType, parentId) {
-    await dbConnect();
-    const session = await getSession();
-    if (!session) return { success: false, error: 'Unauthorized' };
-
-    try {
-        // Since we don't get the external ID back easily from the client PUT response (it's in the response body of the PUT)
-        // usage: client sends us the response body they got from Google
-        // BUT: The client response from Google Drive PUT includes 'id', 'name', 'mimeType' etc.
-        // So we should ask the client to pass that data back to us.
-
-        // Let's assume the argument needs to be flexible.
-        // Actually, the client should query the Drive API or we can just list the latest file?
-        // No, the client receives the JSON response from the PUT completion.
-        // Let's update the signature to accept the Drive metadata.
-
-        console.error('Incorrect usage of completeUpload. Waiting for implementation details update.');
-        throw new Error('Not implemented fully');
-    } catch (e) {
-        return { success: false, error: e.message };
-    }
-}
+// Renamed from completeUpload to finalizeUpload to match usage in previous steps, 
+// or kept distinct if the architecture requires it. 
+// Based on previous file content, finalizeUpload was the main one used. I'll include both if unsure or just finalize.
+// The broken file showed finalizeUpload.
 
 export async function finalizeUpload(fileData, parentId) {
     // fileData should contain: { id, name, mimeType, size, webViewLink, webContentLink } from Google Drive response
@@ -100,18 +87,25 @@ export async function finalizeUpload(fileData, parentId) {
         const newFile = await File.create({
             name: fileData.name,
             mimeType: fileData.mimeType,
-            size: Math.round(parseInt(fileData.size) / 1024), // Drive returns size in bytes string
+            size: Math.round(parseInt(fileData.size) / 1024),
             folder: parentId,
             user: session.userId,
             storageProvider: 'google_drive',
             externalId: fileData.id,
-            externalUrl: fileData.webViewLink, // We need to fetch this if not returned by Upload response
-            downloadUrl: fileData.webContentLink // Same here
+            externalUrl: fileData.webViewLink,
+            downloadUrl: fileData.webContentLink
         });
 
         await User.findByIdAndUpdate(session.userId, {
             $inc: { storageUsage: parseInt(fileData.size) }
         });
+
+        await createNotification(
+            session.userId,
+            'success',
+            'File Uploaded',
+            `"${fileData.name}" has been successfully uploaded.`
+        );
 
         return { success: true, file: JSON.parse(JSON.stringify(newFile)) };
     } catch (error) {
@@ -122,6 +116,7 @@ export async function finalizeUpload(fileData, parentId) {
 
 export async function deleteFile(fileId) {
     await dbConnect();
+    const session = await getSession();
 
     const file = await File.findById(fileId);
     if (!file) return { success: false, error: 'File not found' };
@@ -133,11 +128,19 @@ export async function deleteFile(fileId) {
         }
 
         await File.findByIdAndUpdate(fileId, { isTrash: true });
+
+        if (session) {
+            await createNotification(
+                session.userId,
+                'warning',
+                'File Moved to Trash',
+                `"${file.name}" has been moved to trash.`
+            );
+        }
+
         return { success: true };
     } catch (error) {
         console.error('Delete error:', error);
-        // Fallback: still mark local as trash even if cloud fails?
-        // Ideally yes, to keep UI responsive.
         await File.findByIdAndUpdate(fileId, { isTrash: true });
         return { success: true, warning: 'Cloud sync failed' };
     }
@@ -145,6 +148,7 @@ export async function deleteFile(fileId) {
 
 export async function restoreFile(fileId) {
     await dbConnect();
+    const session = await getSession();
 
     const file = await File.findById(fileId);
     if (!file) return { success: false, error: 'File not found' };
@@ -156,6 +160,16 @@ export async function restoreFile(fileId) {
         }
 
         await File.findByIdAndUpdate(fileId, { isTrash: false });
+
+        if (session) {
+            await createNotification(
+                session.userId,
+                'info',
+                'File Restored',
+                `"${file.name}" has been restored from trash.`
+            );
+        }
+
         return { success: true };
     } catch (error) {
         console.error('Restore error:', error);
@@ -165,6 +179,7 @@ export async function restoreFile(fileId) {
 
 export async function deleteFilePermanently(fileId) {
     await dbConnect();
+    const session = await getSession();
 
     const file = await File.findById(fileId);
     if (!file) return { success: false, error: 'File not found' };
@@ -177,9 +192,17 @@ export async function deleteFilePermanently(fileId) {
 
         await File.findByIdAndDelete(fileId);
 
-        // Decrement usage
         if (file.user) {
             await User.findByIdAndUpdate(file.user, { $inc: { storageUsage: -(file.size * 1024) } });
+        }
+
+        if (session) {
+            await createNotification(
+                session.userId,
+                'error',
+                'File Deleted Permanently',
+                `"${file.name}" has been permanently deleted.`
+            );
         }
 
         return { success: true };
@@ -198,7 +221,6 @@ export async function renameFile(fileId, newName) {
     try {
         const adapter = getStorageAdapter(file.storageProvider || 'google_drive');
 
-        // Try to rename in cloud if supported
         if (file.externalId && adapter.rename) {
             const renamed = await adapter.rename(file.externalId, newName);
             if (!renamed) {

@@ -4,9 +4,10 @@ import { Search, Bell, Plus, FileText, Folder, User as UserIcon, LogOut, Upload 
 import { useState, useEffect, useRef } from 'react';
 import { searchFiles } from '@/app/actions/search-actions';
 import { getUser, updateProfileImage } from '@/app/actions/user-actions';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import NotificationsDropdown from './NotificationsDropdown';
+import { getNotifications } from '@/app/actions/notification-actions';
 
 export default function Topbar() {
     const [query, setQuery] = useState('');
@@ -15,9 +16,14 @@ export default function Topbar() {
     const [user, setUser] = useState(null);
     const [showProfileMenu, setShowProfileMenu] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
+    const [notifications, setNotifications] = useState([]);
+    const [unreadCount, setUnreadCount] = useState(0);
+    const [showNotifications, setShowNotifications] = useState(false);
+
     const searchRef = useRef(null);
     const profileRef = useRef(null);
     const fileInputRef = useRef(null);
+    const notificationRef = useRef(null);
     const router = useRouter();
 
     // Fetch user on mount
@@ -27,6 +33,30 @@ export default function Topbar() {
             if (userData) setUser(userData);
         }
         fetchUser();
+    }, []);
+
+    // Fetch Notifications
+    const fetchNotifications = async () => {
+        const result = await getNotifications();
+        if (result.success) {
+            setNotifications(result.notifications);
+            setUnreadCount(result.unreadCount);
+        }
+    };
+
+    useEffect(() => {
+        fetchNotifications();
+        // Poll every 30 seconds for new notifications
+        const interval = setInterval(fetchNotifications, 30000);
+
+        // Listen for internal triggers (e.g. after upload)
+        const handleRefresh = () => fetchNotifications();
+        window.addEventListener('refresh-notifications', handleRefresh);
+
+        return () => {
+            clearInterval(interval);
+            window.removeEventListener('refresh-notifications', handleRefresh);
+        };
     }, []);
 
     // Debounce search
@@ -53,6 +83,9 @@ export default function Topbar() {
             }
             if (profileRef.current && !profileRef.current.contains(event.target)) {
                 setShowProfileMenu(false);
+            }
+            if (notificationRef.current && !notificationRef.current.contains(event.target)) {
+                setShowNotifications(false);
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
@@ -143,10 +176,27 @@ export default function Topbar() {
             </div>
 
             <div className="flex items-center gap-4">
-                <button className="p-2 text-slate-400 hover:text-white hover:bg-white/5 rounded-full transition-all relative">
-                    <Bell size={20} />
-                    <span className="absolute top-2 right-2 h-2 w-2 bg-red-500 rounded-full"></span>
-                </button>
+                {/* Notifications Bell */}
+                <div className="relative" ref={notificationRef}>
+                    <button
+                        onClick={() => setShowNotifications(!showNotifications)}
+                        className={`p-2 rounded-full transition-all relative ${showNotifications ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                    >
+                        <Bell size={20} />
+                        {unreadCount > 0 && (
+                            <span className="absolute top-2 right-2 h-2.5 w-2.5 bg-red-500 rounded-full border-2 border-slate-900 animate-pulse"></span>
+                        )}
+                    </button>
+
+                    {showNotifications && (
+                        <NotificationsDropdown
+                            notifications={notifications}
+                            unreadCount={unreadCount}
+                            onRefresh={fetchNotifications}
+                            onClose={() => setShowNotifications(false)}
+                        />
+                    )}
+                </div>
 
                 <button
                     onClick={() => window.dispatchEvent(new CustomEvent('trigger-upload'))}

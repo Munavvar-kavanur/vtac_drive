@@ -11,7 +11,6 @@ export default function ShareModal({ isOpen, onClose, item }) {
     const [isLoading, setIsLoading] = useState(false);
 
     // Initialize link on mount (safe because parent keys component by item._id)
-    // Initialize link on mount (safe because parent keys component by item._id)
     useEffect(() => {
         if (item?.isPublic && item?.shareToken && typeof window !== 'undefined') {
             // Use setTimeout to avoid "synchronous setState" build error
@@ -40,7 +39,7 @@ export default function ShareModal({ isOpen, onClose, item }) {
     if (!isOpen || !item) return null;
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={`Share ${item.name}`}>
+        <Modal isOpen={isOpen} onClose={onClose} title="Share File">
             <div className="space-y-6">
                 <div className="flex justify-center mb-6">
                     <div className="h-20 w-20 bg-purple-500/10 rounded-full flex items-center justify-center ring-1 ring-purple-500/30">
@@ -48,9 +47,9 @@ export default function ShareModal({ isOpen, onClose, item }) {
                     </div>
                 </div>
 
-                <p className="text-center text-slate-300">
-                    Share <span className="font-semibold text-white">&quot;{item.name}&quot;</span> with others via a public link.
-                </p>
+                <div className="text-center text-slate-300">
+                    Share <span className="font-semibold text-white inline-block max-w-[250px] truncate align-bottom" title={item.name}>&quot;{item.name}&quot;</span> with others via a public link.
+                </div>
 
                 {!generatedLink ? (
                     <button

@@ -5,6 +5,8 @@ import { Folder as FolderIcon, FileText, MoreVertical, FolderPlus, FilePlus, Upl
 import Link from 'next/link';
 import CreateFolderModal from './CreateFolderModal';
 import ShareModal from './ShareModal';
+import UploadWidget from './UploadWidget';
+import FileDetailsPanel from './FileDetailsPanel';
 import FileActionsMenu from './FileActionsMenu';
 import { createFolder, deleteFolder } from '@/app/actions/folder-actions';
 import { uploadFile, deleteFile } from '@/app/actions/file-actions';
@@ -14,9 +16,12 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
     const [viewMode, setViewMode] = useState('grid');
     const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
     const [shareItem, setShareItem] = useState(null); // Item to share | null
+    const [selectedDetailFile, setSelectedDetailFile] = useState(null);
     const [isDragging, setIsDragging] = useState(false);
-    const [isUploading, setIsUploading] = useState(false);
-    const [uploadProgress, setUploadProgress] = useState(0);
+
+    // Multi-file upload state: { [id]: { id, name, size, progress, status, error, timestamp } }
+    const [uploads, setUploads] = useState({});
+
     const fileInputRef = useRef(null);
     const router = useRouter();
 
@@ -30,102 +35,110 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
         return () => window.removeEventListener('trigger-upload', handleTriggerUpload);
     }, []);
 
+    // Helper to update a single upload's state
+    const updateUploadState = (id, updates) => {
+        setUploads(prev => ({
+            ...prev,
+            [id]: { ...prev[id], ...updates }
+        }));
+    };
+
+    const uploadSingleFile = async (file, uploadId) => {
+        try {
+            updateUploadState(uploadId, { status: 'uploading', progress: 0 });
+
+            // 1. Get Resumable Session URL from Server
+            const { getUploadSession, finalizeUpload } = await import('@/app/actions/file-actions');
+            const finalMimeType = file.type || 'application/octet-stream';
+
+            const sessionResult = await getUploadSession(file.name, finalMimeType, file.size, parentId, window.location.origin);
+
+            if (!sessionResult.success) {
+                throw new Error(sessionResult.error || 'Failed to init upload session');
+            }
+
+            const uploadUrl = sessionResult.uploadUrl;
+
+            // 2. Upload directly to Google Drive using XMLHttpRequest
+            const driveResponse = await new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+
+                xhr.upload.addEventListener('progress', (event) => {
+                    if (event.lengthComputable) {
+                        const percent = Math.round((event.loaded / event.total) * 100);
+                        updateUploadState(uploadId, { progress: percent });
+                    }
+                });
+
+                xhr.addEventListener('load', () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        try {
+                            resolve(JSON.parse(xhr.responseText));
+                        } catch (e) {
+                            resolve({ id: 'unknown', size: file.size });
+                        }
+                    } else {
+                        reject(new Error(`Drive upload failed: ${xhr.status} ${xhr.statusText}`));
+                    }
+                });
+
+                xhr.addEventListener('error', () => {
+                    reject(new Error('Network error (CORS/Connectivity)'));
+                });
+
+                xhr.addEventListener('abort', () => reject(new Error('Cancelled')));
+
+                xhr.open('PUT', uploadUrl);
+                xhr.setRequestHeader('Content-Type', finalMimeType);
+                xhr.send(file);
+            });
+
+            // 3. Finalize on Server
+            const finalResult = await finalizeUpload(driveResponse, parentId);
+
+            if (!finalResult.success) {
+                throw new Error(finalResult.error);
+            }
+
+            updateUploadState(uploadId, { status: 'completed', progress: 100 });
+
+            // Trigger refresh after each successful upload to update UI immediately
+            window.dispatchEvent(new CustomEvent('refresh-storage-stats'));
+            router.refresh();
+
+        } catch (error) {
+            console.error(`Upload failed for ${file.name}:`, error);
+            updateUploadState(uploadId, { status: 'error', error: error.message });
+        }
+    };
+
     const handleFileUpload = async (files) => {
         if (!files || files.length === 0) return;
-        setIsUploading(true);
-        setUploadProgress(0);
 
-        // Upload sequentially for now
-        for (const file of files) {
-            console.log('Starting resumable upload for:', file.name);
+        // Initialize all uploads in 'pending' state
+        const newUploads = {};
+        const uploadsToStart = [];
 
-            try {
-                // 1. Get Resumable Session URL from Server
-                const { getUploadSession, finalizeUpload } = await import('@/app/actions/file-actions');
+        Array.from(files).forEach(file => {
+            const id = Math.random().toString(36).substr(2, 9);
+            const uploadObj = {
+                id,
+                name: file.name,
+                size: file.size,
+                progress: 0,
+                status: 'pending',
+                timestamp: Date.now()
+            };
+            newUploads[id] = uploadObj;
+            uploadsToStart.push({ file, id });
+        });
 
-                const finalMimeType = file.type || 'application/octet-stream';
-                console.log(`[DEBUG] Initializing upload session:`, {
-                    name: file.name,
-                    type: file.type,
-                    finalMimeType,
-                    size: file.size,
-                    origin: window.location.origin
-                });
+        setUploads(prev => ({ ...prev, ...newUploads }));
 
-                const sessionResult = await getUploadSession(file.name, finalMimeType, file.size, parentId, window.location.origin);
-
-                if (!sessionResult.success) {
-                    throw new Error(sessionResult.error || 'Failed to init upload session');
-                }
-
-                const uploadUrl = sessionResult.uploadUrl;
-                console.log(`[DEBUG] Upload URL obtained:`, uploadUrl);
-                console.log(`[DEBUG] Starting XHR upload with Content-Type:`, finalMimeType);
-
-                // 2. Upload directly to Google Drive using XMLHttpRequest (for progress tracking)
-                const driveResponse = await new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest();
-
-                    xhr.upload.addEventListener('progress', (event) => {
-                        if (event.lengthComputable) {
-                            const percent = Math.round((event.loaded / event.total) * 100);
-                            setUploadProgress(percent);
-                        }
-                    });
-
-                    xhr.addEventListener('load', () => {
-                        if (xhr.status >= 200 && xhr.status < 300) { // Standard success
-                            try {
-                                resolve(JSON.parse(xhr.responseText));
-                            } catch (e) {
-                                // Sometimes Drive returns empty body or non-JSON on 200/201 for PUT?
-                                // Usually it returns the file metadata.
-                                resolve({ id: 'unknown', size: file.size });
-                            }
-                        } else if (xhr.status === 308) {
-                            // Resume Incomplete (shouldn't happen for single atomic upload but handle it)
-                            reject(new Error('Incomplete upload (chunking not implemented)'));
-                        } else {
-                            reject(new Error(`Drive upload failed: ${xhr.status} ${xhr.statusText}`));
-                        }
-                    });
-
-                    xhr.addEventListener('error', () => {
-                        reject(new Error('Network error during upload (CORS or Connectivity)'));
-                    });
-
-                    xhr.addEventListener('abort', () => {
-                        reject(new Error('Upload cancelled'));
-                    });
-
-                    xhr.open('PUT', uploadUrl);
-
-                    // Critical: Content-Type must match what was sent to getResumableUploadUrl
-                    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-
-                    xhr.send(file);
-                });
-                console.log('Drive Upload Complete:', driveResponse);
-
-                // 3. Finalize on Server (Save to DB)
-                const finalResult = await finalizeUpload(driveResponse, parentId);
-
-                if (!finalResult.success) {
-                    throw new Error(finalResult.error);
-                }
-
-            } catch (error) {
-                console.error('Upload failed:', error);
-                alert(`Failed to upload ${file.name}: ${error.message}`);
-                setIsUploading(false);
-                return;
-            }
-        }
-
-        window.dispatchEvent(new CustomEvent('refresh-storage-stats'));
-        router.refresh();
-        setIsUploading(false);
-        setUploadProgress(0);
+        // Start all uploads concurrently (browser will limit max connections automatically)
+        uploadsToStart.forEach(({ file, id }) => {
+            uploadSingleFile(file, id);
+        });
     };
 
     const onDrop = (e) => {
@@ -194,11 +207,10 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
                     </button>
                     <button
                         onClick={() => fileInputRef.current?.click()}
-                        disabled={isUploading}
                         className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-all text-sm font-medium"
                     >
-                        {isUploading ? <UploadCloud size={16} className="animate-pulse" /> : <FilePlus size={16} />}
-                        {isUploading ? 'Uploading...' : 'Upload File'}
+                        <FilePlus size={16} />
+                        Upload File
                     </button>
                 </div>
 
@@ -225,21 +237,26 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
                 </div>
             </div>
 
-            {/* Upload Progress Bar */}
-            {isUploading && (
-                <div className="glass-panel p-4 rounded-xl border border-blue-500/30 bg-blue-500/5">
-                    <div className="flex justify-between text-sm text-slate-300 mb-2">
-                        <span className="flex items-center gap-2"><UploadCloud size={16} className="animate-bounce" /> Uploading files...</span>
-                        <span className="font-mono">{uploadProgress}%</span>
-                    </div>
-                    <div className="h-2 w-full bg-slate-700 rounded-full overflow-hidden">
-                        <div
-                            className="h-full bg-blue-500 transition-all duration-100 ease-out"
-                            style={{ width: `${uploadProgress}%` }}
-                        ></div>
-                    </div>
-                </div>
-            )}
+            {/* Multi-File Upload Widget */}
+            <UploadWidget
+                uploads={uploads}
+                onClose={() => setUploads({})}
+            />
+
+            {/* File Details Side Panel */}
+            <FileDetailsPanel
+                file={selectedDetailFile}
+                onClose={() => setSelectedDetailFile(null)}
+                onShare={(file) => setShareItem({ ...file, type: 'file' })}
+                onDelete={async (file) => {
+                    const result = await deleteFile(file._id);
+                    if (result.success) {
+                        router.refresh();
+                    } else {
+                        alert(result.error || 'Failed to delete file');
+                    }
+                }}
+            />
 
             {/* Content Area */}
             {viewMode === 'grid' ? (
@@ -274,7 +291,8 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
                     {initialFiles.map((file) => (
                         <div
                             key={file._id}
-                            className="glass-panel p-4 rounded-xl flex flex-col items-center justify-center gap-3 aspect-square hover:bg-slate-800/80 transition-all group cursor-pointer border border-transparent hover:border-white/10 relative"
+                            onClick={() => setSelectedDetailFile(file)} // Trigger details panel
+                            className="glass-panel p-4 rounded-xl flex flex-col items-center justify-center gap-3 aspect-square hover:bg-slate-800/80 transition-all group cursor-pointer border border-transparent hover:border-blue-500/50 relative active:scale-95 duration-200"
                         >
                             <FileActionsMenu
                                 item={file}
@@ -295,7 +313,7 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
                             </div>
                             <div className="text-center w-full">
                                 <p className="text-sm font-medium text-slate-200 truncate">{file.name}</p>
-                                <p className="text-xs text-slate-500">{file.size} KB</p>
+                                <p className="text-xs text-slate-500">{file.size ? (file.size / 1024).toFixed(1) + ' KB' : '0 KB'}</p>
                             </div>
                         </div>
                     ))}
