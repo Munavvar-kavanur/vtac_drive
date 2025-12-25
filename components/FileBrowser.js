@@ -9,7 +9,7 @@ import UploadWidget from './UploadWidget';
 import FileDetailsPanel from './FileDetailsPanel';
 import FileActionsMenu from './FileActionsMenu';
 import { createFolder, deleteFolder } from '@/app/actions/folder-actions';
-import { uploadFile, deleteFile } from '@/app/actions/file-actions';
+import { deleteFile } from '@/app/actions/file-actions';
 import { useRouter } from 'next/navigation';
 
 export default function FileBrowser({ initialFolders, initialFiles, parentId }) {
@@ -51,13 +51,22 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
             const { getUploadSession, finalizeUpload } = await import('@/app/actions/file-actions');
             const finalMimeType = file.type || 'application/octet-stream';
 
-            const sessionResult = await getUploadSession(file.name, finalMimeType, file.size, parentId, window.location.origin);
+            const sessionResult = await getUploadSession(
+                file.name,
+                finalMimeType,
+                file.size,
+                parentId,
+                window.location.origin
+            );
 
             if (!sessionResult.success) {
                 throw new Error(sessionResult.error || 'Failed to init upload session');
             }
 
             const uploadUrl = sessionResult.uploadUrl;
+            if (!uploadUrl) {
+                throw new Error('Server returned no upload URL');
+            }
 
             // 2. Upload directly to Google Drive using XMLHttpRequest
             const driveResponse = await new Promise((resolve, reject) => {
@@ -75,20 +84,24 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
                         try {
                             resolve(JSON.parse(xhr.responseText));
                         } catch (e) {
+                            // If drive response isn't JSON (sometimes happens with empty 200s), handle partially
+                            console.warn('Drive response not JSON:', xhr.responseText);
                             resolve({ id: 'unknown', size: file.size });
                         }
                     } else {
+                        // Capture more detail on why it failed
                         reject(new Error(`Drive upload failed: ${xhr.status} ${xhr.statusText}`));
                     }
                 });
 
                 xhr.addEventListener('error', () => {
-                    reject(new Error('Network error (CORS/Connectivity)'));
+                    reject(new Error('Network error during upload (CORS or Connectivity)'));
                 });
 
-                xhr.addEventListener('abort', () => reject(new Error('Cancelled')));
+                xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
 
                 xhr.open('PUT', uploadUrl);
+                // Important: Google Drive requires the Content-Type to match what was signed
                 xhr.setRequestHeader('Content-Type', finalMimeType);
                 xhr.send(file);
             });
@@ -97,7 +110,7 @@ export default function FileBrowser({ initialFolders, initialFiles, parentId }) 
             const finalResult = await finalizeUpload(driveResponse, parentId);
 
             if (!finalResult.success) {
-                throw new Error(finalResult.error);
+                throw new Error(finalResult.error || 'Failed to finalize upload record');
             }
 
             updateUploadState(uploadId, { status: 'completed', progress: 100 });

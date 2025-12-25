@@ -57,18 +57,23 @@ export async function uploadFile(formData) {
 export async function getUploadSession(fileName, mimeType, fileSize, parentId, origin) {
     await dbConnect();
     const session = await getSession();
-    if (!session) return { success: false, error: 'Unauthorized' };
+    if (!session) return { success: false, error: 'Unauthorized: User not logged in' };
 
     const finalMimeType = mimeType || 'application/octet-stream';
 
     try {
         const adapter = getStorageAdapter('google_drive');
+        // Ensure fileSize is passed as string if expected by adapter, or number. Adapter expects number/string usually.
         const uploadUrl = await adapter.getResumableUploadUrl(fileName, finalMimeType, fileSize, parentId, origin);
+
+        if (!uploadUrl) {
+            return { success: false, error: 'Failed to generate upload URL (Provider returned null)' };
+        }
 
         return { success: true, uploadUrl };
     } catch (error) {
         console.error('Get Upload Session Error:', error);
-        return { success: false, error: error.message };
+        return { success: false, error: `Upload Init Failed: ${error.message}` };
     }
 }
 
@@ -81,13 +86,18 @@ export async function finalizeUpload(fileData, parentId) {
     // fileData should contain: { id, name, mimeType, size, webViewLink, webContentLink } from Google Drive response
     await dbConnect();
     const session = await getSession();
-    if (!session) return { success: false, error: 'Unauthorized' };
+    if (!session) return { success: false, error: 'Unauthorized: Session expired' };
 
     try {
+        if (!fileData || !fileData.id) {
+            console.error('Finalize recieved invalid file data:', fileData);
+            return { success: false, error: 'Invalid upload data received from provider' };
+        }
+
         const newFile = await File.create({
-            name: fileData.name,
-            mimeType: fileData.mimeType,
-            size: Math.round(parseInt(fileData.size) / 1024),
+            name: fileData.name || 'Untitled',
+            mimeType: fileData.mimeType || 'application/octet-stream',
+            size: Math.round(parseInt(fileData.size || 0) / 1024),
             folder: parentId,
             user: session.userId,
             storageProvider: 'google_drive',
@@ -97,7 +107,7 @@ export async function finalizeUpload(fileData, parentId) {
         });
 
         await User.findByIdAndUpdate(session.userId, {
-            $inc: { storageUsage: parseInt(fileData.size) }
+            $inc: { storageUsage: parseInt(fileData.size || 0) }
         });
 
         await createNotification(
@@ -110,7 +120,7 @@ export async function finalizeUpload(fileData, parentId) {
         return { success: true, file: JSON.parse(JSON.stringify(newFile)) };
     } catch (error) {
         console.error('Finalize Upload Error:', error);
-        return { success: false, error: error.message };
+        return { success: false, error: `Finalization Failed: ${error.message}` };
     }
 }
 

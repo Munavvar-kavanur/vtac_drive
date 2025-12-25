@@ -6,6 +6,7 @@ import { X, Minimize2, Maximize2, CheckCircle, AlertCircle, File, Loader2 } from
 export default function UploadWidget({ uploads, onClose }) {
     // Compute sorted list directly during render
     const uploadList = Object.values(uploads).sort((a, b) => b.timestamp - a.timestamp);
+    const [isExpanded, setIsExpanded] = useState(true);
 
     if (uploadList.length === 0) return null;
 
